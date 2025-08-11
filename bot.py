@@ -146,3 +146,26 @@ async def list_trackers(interaction: discord.Interaction):
     await interaction.response.send_message("\n".join(lines))
 
 bot.run(TOKEN)
+
+
+async def run_webserver():
+    async def handle(request):
+        return web.Response(text="OK")
+
+    app = web.Application()
+    app.add_routes([web.get("/", handle)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    # Порт берем из переменной окружения Render
+    port = int(os.environ.get("PORT", 8000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Web server запущен на порту {port}")
+
+async def main():
+    # Запускаем вебсервер параллельно с ботом
+    await run_webserver()
+    await bot.start(TOKEN)
+
+if __name__ == "__main__":
+    asyncio.run(main())
