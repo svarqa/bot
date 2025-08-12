@@ -249,21 +249,44 @@ class HealthHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         return
 
+    def _send_ok(self, body: bytes | None = None):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        if body:
+            self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
+
     def do_GET(self):
         if self.path == "/healthz":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"ok")
+            # Ответ на GET — тело "ok"
+            self._send_ok(b"ok")
             return
-        # опционально: корень отдаёт краткую страницу
         if self.path in ("/", "/index.html"):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            body = b"<html><body><h1>Bot is running</h1></body></html>"
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(b"<html><body><h1>Bot is running</h1></body></html>")
+            self.wfile.write(body)
             return
         super().do_GET()
+
+    def do_HEAD(self):
+        if self.path == "/healthz":
+            # HEAD — тот же код, но без тела
+            self._send_ok(None)
+            return
+        if self.path in ("/", "/index.html"):
+            body = b"<html><body><h1>Bot is running</h1></body></html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return
+        super().do_HEAD()
+
 
 def run_webserver():
     port = int(os.environ.get("PORT", 8000))
