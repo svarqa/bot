@@ -40,6 +40,7 @@ class Tracker:
         self.timeout_minutes = max(1, int(timeout_minutes))
         self.timeout = self.timeout_minutes * 60
         self.repeat = max(1, int(repeat))
+        # allow passing stored last_activity (timezone-aware) when loading
         self.last_activity = last_activity or datetime.now(timezone.utc)
         self.active = True
         # Запускаем таск в текущем event loop
@@ -77,6 +78,7 @@ def save_trackers():
             "message": tracker.message,
             "timeout_minutes": tracker.timeout_minutes,
             "repeat": tracker.repeat,
+            # ISO format with timezone
             "last_activity": tracker.last_activity.isoformat(),
         }
     try:
@@ -95,7 +97,6 @@ async def load_trackers():
         print("Ошибка чтения файла трекеров:", e)
         return
 
-    now = datetime.now(timezone.utc)
     for channel_id_str, tdata in data.items():
         try:
             channel_id = int(channel_id_str)
@@ -112,13 +113,23 @@ async def load_trackers():
             except Exception:
                 print(f"[load_trackers] Не удалось получить канал {channel_id}, пропускаю")
                 continue
+        # Попытка восстановить last_activity из сохранённых данных
+        last_activity_iso = tdata.get("last_activity")
+        last_activity_dt = None
+        if last_activity_iso:
+            try:
+                # fromisoformat поддерживает смещение (например, "+00:00")
+                last_activity_dt = datetime.fromisoformat(last_activity_iso)
+            except Exception:
+                last_activity_dt = None
+
         try:
             tracker = Tracker(
                 channel,
                 tdata.get("message", "ping"),
                 tdata.get("timeout_minutes", 1),
                 tdata.get("repeat", 1),
-                now,
+                last_activity_dt,
             )
             trackers[channel_id] = tracker
         except Exception as e:
@@ -187,9 +198,6 @@ async def start(interaction: discord.Interaction, message: str, timeout_minutes:
         await safe_interaction_send(interaction, "Трекер уже запущен в этом канале.", ephemeral=True)
         return
 
-    # если готовишься делать долгую работу -> можно defer
-    # await interaction.response.defer(ephemeral=True)
-
     tracker = Tracker(channel, message, timeout_minutes, repeat)
     trackers[channel.id] = tracker
     save_trackers()
@@ -236,15 +244,32 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     print("[app_command_error]", error)
 
 # ------- Webserver (чтобы Render видел порт) -------
-class QuietHandler(http.server.SimpleHTTPRequestHandler):
+# Заменили QuietHandler на HealthHandler, который отвечает 200 на /healthz
+class HealthHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         return
+
+    def do_GET(self):
+        if self.path == "/healthz":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
+        # опционально: корень отдаёт краткую страницу
+        if self.path in ("/", "/index.html"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"<html><body><h1>Bot is running</h1></body></html>")
+            return
+        super().do_GET()
 
 def run_webserver():
     port = int(os.environ.get("PORT", 8000))
     try:
         socketserver.ThreadingTCPServer.allow_reuse_address = True
-        with socketserver.ThreadingTCPServer(("0.0.0.0", port), QuietHandler) as httpd:
+        with socketserver.ThreadingTCPServer(("0.0.0.0", port), HealthHandler) as httpd:
             print(f"[webserver] listening on 0.0.0.0:{port}, PID={os.getpid()}")
             httpd.serve_forever()
     except Exception as e:
